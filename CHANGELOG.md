@@ -10,11 +10,12 @@ All notable changes to this project will be documented in this file.
 
 **Benchmark: `generate --count 30 --max-nodes 9` (release build)**
 
-| Version | Time |
-|---------|------|
-| alpha-0.0.1 (baseline) | ~129 s |
-| optimized | ~38 s |
-| **Speedup** | **~3.3×** |
+| Version | Time | Notes |
+|---------|------|-------|
+| alpha-0.0.1 (baseline) | 148 s | no optimizations |
+| rayon + pre-filters only | 128 s | parallel scan + label/size filters |
+| + candidate caching + precomputed sizes | **38 s** | all optimizations |
+| **Total speedup** | **~3.9×** | |
 
 #### Changes
 
