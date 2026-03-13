@@ -274,8 +274,10 @@ tree3-explorer/
 │   ├── tree.rs        — arena-based Tree + Node structs
 │   ├── canonical.rs   — canonical string serialization
 │   ├── embedding.rs   — homeomorphic embedding check
-│   ├── generator.rs   — tree enumeration + sequence search
-│   └── svg_render.rs  — layout + SVG string generation
+│   ├── fingerprint.rs — fast pre-rejection fingerprint (stack-allocated)
+│   ├── generator.rs   — tree enumeration, CandidatePool, sequence search
+│   ├── memlock.rs     — physical RAM pinning (mlock / VirtualLock)
+│   └── svg_render.rs  — layout, per-tree SVG, live overview SVG
 └── scripts/
     ├── run_basic.cmd
     ├── run_tree1.cmd
@@ -292,18 +294,26 @@ CLI args
    ▼
 generate_sequence()
    │
-   ├─► all_trees_of_size_cached()   [generator.rs]
-   │       └─► canonicalize()       [canonical.rs]
+   ├─► pre-warm: all_trees_of_size_cached()   [generator.rs]
+   │       └─► canonicalize()                 [canonical.rs]
    │
-   ├─► embeds()                     [embedding.rs]
-   │       ├─► embeds_into_subtree()
-   │       └─► can_embed_in_subtree()
-   │               └─► match_children()  (backtracking)
+   ├─► CandidatePool::new()                   [generator.rs]
+   │       ├─► TreeFingerprint::compute()      [fingerprint.rs]  (parallel)
+   │       └─► memlock::try_lock_in_ram()      [memlock.rs]
    │
-   └─► on_found callback
-           ├─► render_svg()         [svg_render.rs]
+   ├─► per position:
+   │       ├─► CandidatePool::find_first_live()   ← O(N) atomic loads
+   │       └─► CandidatePool::sweep()             ← parallel post-acceptance prune
+   │               ├─► TreeFingerprint::compatible()
+   │               └─► embeds()                   [embedding.rs]
+   │                       └─► match_children()   (backtracking)
+   │
+   └─► on_found callback (fires immediately on each acceptance)
+           ├─► render_svg()             [svg_render.rs]
            │       └─► compute_layout()
-           └─► write tree_NNN.svg
+           ├─► write tree_NNN.svg       ← written as each tree is found
+           ├─► render_overview_svg()    [svg_render.rs]
+           └─► rewrite overview.svg     ← rewritten after every acceptance
    │
    └─► (optional) write sequence.json
 ```
@@ -342,18 +352,30 @@ Format: `label(child1,child2,...)` with children sorted lexicographically. Leave
 | `can_embed_in_subtree(a, a_node, b, b_node) -> bool` | Does A's subtree at `a_node` embed *somewhere* within B's subtree at `b_node`? |
 | `match_children(...)` | Backtracking injective matching of A-children to B-children |
 
+### `fingerprint.rs`
+
+`TreeFingerprint` — a 17-byte `Copy` struct (size, label\_counts\[8\], max\_degree\_per\_label\[8\]) computed once per tree. `compatible(a, b)` is an O(1) gate that rejects impossible embeddings before the recursive check.
+
+### `memlock.rs`
+
+`try_lock_in_ram(slice, label)` — attempts to pin a slice in physical RAM so the OS does not page it to swap. Uses `VirtualLock` on Windows and `mlock` on Unix. Failure is non-fatal; a warning is printed and execution continues. On Windows, run as Administrator or grant the "Lock pages in memory" privilege for large regions.
+
 ### `generator.rs`
 
-| Function | Description |
-|----------|-------------|
+| Item | Description |
+|------|-------------|
 | `all_trees_of_size_cached(size, k, cache)` | All distinct labeled trees of exactly `size` nodes, memoized |
-| `generate_sequence(count, max_nodes, k, strategy, callback)` | Full sequence search; calls `callback` for each accepted tree |
+| `CandidatePool` | Strategy-sorted candidates with pre-stored fingerprints and an `AtomicBool` rejection bitset; flat arrays locked in physical RAM |
+| `CandidatePool::sweep(accepted, fp)` | Parallel post-acceptance sweep — marks all candidates that `accepted` embeds into as permanently rejected |
+| `CandidatePool::find_first_live()` | O(N) parallel scan over the rejection bitset; returns the first non-rejected candidate in strategy order |
+| `generate_sequence(count, max_nodes, k, strategy, callback)` | Full sequence search; calls `callback` immediately on each acceptance |
 
 ### `svg_render.rs`
 
 | Function | Description |
 |----------|-------------|
-| `render_svg(tree, title) -> String` | Full SVG string for a tree |
+| `render_svg(tree, title) -> String` | Full SVG string for a single tree |
+| `render_overview_svg(entries) -> String` | Dark-theme grid SVG showing all trees found so far; rewritten after every acceptance |
 | `compute_layout(tree) -> Layout` | Assign (x, y) pixel coordinates to each node |
 
 ---
@@ -390,6 +412,16 @@ cargo run -- generate --count 10
 ```
 
 This generates the first 10 trees in a TREE(3) sequence (labels {1,2,3}, max 8 nodes per tree) and writes SVGs to `./output/`.
+
+### Run until exhausted
+
+Omitting `--count` runs until no valid tree can be found for the given `--max-nodes` budget:
+
+```bash
+cargo run --release -- generate --max-nodes 9 --out ./output/full
+```
+
+The sequence terminates naturally when the candidate pool is exhausted. For `--max-nodes 9` this typically produces 20–30 trees before stopping.
 
 ### Validate TREE(2) = 3
 
@@ -448,7 +480,7 @@ tree3 generate [OPTIONS]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--count N` | 10 | Number of trees to generate |
+| `--count N` | *(none)* | Stop after N trees. **Omit to run until the sequence is exhausted.** |
 | `--max-nodes N` | 8 | Hard cap on nodes per tree (independent of i-node rule) |
 | `--labels N` | 3 | Label alphabet size; labels are `1..=N` |
 | `--out PATH` | `./output` | Directory for SVG output files |
@@ -487,7 +519,7 @@ All scripts use `%~dp0..` so they work regardless of current working directory.
 
 ### SVG files
 
-Each accepted tree produces `output/tree_NNN.svg`:
+Each accepted tree produces `output/tree_NNN.svg` **immediately when found** — files appear on disk during the run, not only at the end:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -500,6 +532,10 @@ Each accepted tree produces `output/tree_NNN.svg`:
 ```
 
 Nodes are colored by label (blue/orange/red for labels 1/2/3). Edges are gray. Labels are white text centered in each circle.
+
+### overview.svg
+
+`output/overview.svg` is a **live grid** showing every tree found so far. It is rewritten after each acceptance — open it in a browser tab and refresh to watch the sequence grow in real time. The grid uses 5 columns with a dark background; each cell shows the T-index, node count, canonical form, and a scaled rendering of the tree.
 
 ### sequence.json
 
@@ -537,17 +573,18 @@ The tool uses a **greedy algorithm** — it picks the first valid tree according
 
 ### Practical Depth
 
-With `--max-nodes 8` (the default), the tool can enumerate ~502k candidate trees. The first ~20 sequence entries are found quickly. Beyond that, positions start sharing the same maximum node budget, and the embedding checks against a growing list of accepted trees slow down.
+| `--max-nodes` | Candidates | Approx. RAM | Notes |
+|---------------|-----------|-------------|-------|
+| 8 (default) | ~502k | ~100 MB | Fast; good for exploration |
+| 9 | ~3.5 M | ~700 MB | ~20 s on 8 cores |
+| 10 | ~24.5 M | ~5 GB | Needs `--release`; benefits from 32 GB RAM |
+| 11 | ~171 M | ~33 GB | Borderline on 32 GB; not recommended |
 
-With `--max-nodes 10`, you are looking at ~4.5 million candidates and significantly longer runtimes. Use `--release` mode.
+The two flat arrays (fingerprints + rejection bitset) are locked in physical RAM via `mlock`/`VirtualLock` at startup. On Windows, run as Administrator or grant "Lock pages in memory" for regions above ~1 GB; the program continues without locking on failure.
 
-### No Parallel Search
+### Greedy ≠ Optimal
 
-The spec called for Rust thread-based parallel search. This is not yet implemented. The main bottleneck is `embeds()` calls — these could be parallelized across candidates using `rayon`, but the current single-threaded implementation is correct and fast enough for the intended interactive use case.
-
-### Embedding Cache
-
-No global embedding result cache is implemented. For longer runs, adding a `HashMap<(String, String), bool>` keyed on canonical form pairs would significantly speed up repeated embedding checks.
+The tool uses a **greedy algorithm** and does not backtrack. It produces a *valid candidate sequence*, not the longest possible one. Finding the true longest sequence is an exponential-time problem.
 
 ---
 
@@ -559,4 +596,4 @@ No global embedding result cache is implemented. For longer runs, adding a `Hash
 
 ---
 
-*Built with Rust 1.94 · clap 4 · serde 1 · serde_json 1*
+*Built with Rust 1.94 · clap 4 · serde 1 · serde_json 1 · rayon 1 · windows-sys 0.52 / libc 0.2*
