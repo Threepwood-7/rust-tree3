@@ -21,6 +21,19 @@ set.
 
 ---
 
+### [PERF-1b] Parallel combo enumeration
+**Expected impact: High | Complexity: High**
+
+`gen_combos_cached` (which enumerates child-subtree partitions) is still
+sequential due to its recursive `&mut cache` borrow. Once the cache for
+sizes 1..n-1 is fully populated, the combo enumeration could be parallelized
+per first-child size: each starting size `sz` (1..remaining) is independent.
+This would require restructuring the function to take `&cache` (immutable) and
+accumulate into a parallel fold. The combo enumeration accounts for the remaining
+single-threaded work in the pre-warm phase.
+
+---
+
 ### [PERF-2] SIMD label multiset filter
 **Expected impact: Small-Medium | Complexity: Medium**
 

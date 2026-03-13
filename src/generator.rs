@@ -44,22 +44,29 @@ fn compute_trees_of_size(
             .collect();
     }
 
-    let mut result = Vec::new();
-    let mut seen = HashSet::new();
+    // Enumerate all child-subtree combinations once (sequential: reads cache for sizes < n).
+    let combos: Vec<Vec<Tree>> = partitions_into_subtrees_cached(size - 1, k, cache);
 
-    for root_label in 1..=k {
-        let children_combos = partitions_into_subtrees_cached(size - 1, k, cache);
-        for combo in children_combos {
-            let tree = Tree::from_root_and_children(root_label, &combo);
+    // Build trees for every (root_label, combo) pair in parallel.
+    // `combos` is fully owned and immutable — safe to borrow across threads.
+    // Collect all (label, &combo) input pairs first (cheap: just references),
+    // then par_map the expensive tree construction + canonicalization.
+    let pairs: Vec<(u32, &Vec<Tree>)> = (1..=k)
+        .flat_map(|rl: u32| combos.iter().map(move |c| (rl, c)))
+        .collect();
+
+    let mut result: Vec<(String, Tree)> = pairs
+        .par_iter()
+        .map(|(root_label, combo)| {
+            let tree = Tree::from_root_and_children(*root_label, combo);
             let canon = canonicalize(&tree);
-            if seen.insert(canon.clone()) {
-                result.push((canon, tree));
-            }
-        }
-    }
+            (canon, tree)
+        })
+        .collect();
 
-    // Sort for determinism
-    result.sort_by(|a, b| a.0.cmp(&b.0));
+    // Parallel sort + dedup to eliminate same canonical forms across root labels.
+    result.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    result.dedup_by(|a, b| a.0 == b.0);
     result
 }
 
@@ -114,8 +121,8 @@ fn all_trees_up_to_size_largest_first(
     for sz in 1..=max_size {
         result.extend(all_trees_of_size_cached(sz, k, cache));
     }
-    // Sort: largest size first, then canonical for ties
-    result.sort_by(|a, b| {
+    // Parallel sort: largest size first, then canonical for ties.
+    result.par_sort_unstable_by(|a, b| {
         b.1.size()
             .cmp(&a.1.size())
             .then_with(|| a.0.cmp(&b.0))
@@ -133,7 +140,7 @@ fn all_trees_up_to_size_smallest_first(
     for sz in 1..=max_size {
         result.extend(all_trees_of_size_cached(sz, k, cache));
     }
-    result.sort_by(|a, b| {
+    result.par_sort_unstable_by(|a, b| {
         a.1.size()
             .cmp(&b.1.size())
             .then_with(|| a.0.cmp(&b.0))
@@ -189,6 +196,7 @@ where
         eprintln!("  Size {:2}: {:6} trees", sz, trees.len());
     }
     eprintln!("Total candidate trees: {}", total_trees);
+    eprintln!("Parallel workers: {}", rayon::current_num_threads());
     eprintln!();
 
     // Cache the sorted candidate list to avoid re-sorting millions of trees
@@ -218,14 +226,6 @@ where
         let candidates = candidates_cache.as_ref().unwrap().1.as_slice();
 
         // Parallel scan: find the first candidate (in strategy order) that is valid.
-        // `find_first` processes in parallel but returns the leftmost match,
-        // preserving deterministic ordering.
-        //
-        // For each candidate:
-        //   1. Compute its fingerprint once.
-        //   2. Use fingerprint pre-rejection against every accepted tree before
-        //      falling back to the full backtracking embeds() check.
-        //   3. The inner sequence check also runs in parallel (par_iter().any()).
         let found_item = candidates
             .par_iter()
             .find_first(|(canon, candidate_tree)| {
@@ -233,11 +233,7 @@ where
                     return false;
                 }
                 let cand_fp = TreeFingerprint::compute(candidate_tree);
-                // Does any previously accepted tree embed into this candidate?
-                // Inner loop is sequential: outer par_iter already saturates all
-                // threads, so nested par_iter adds overhead without more parallelism.
                 !sequence.iter().any(|entry| {
-                    // Fast fingerprint gate before the expensive backtracking check.
                     TreeFingerprint::compatible(&entry.fingerprint, &cand_fp)
                         && embeds(&entry.tree, candidate_tree)
                 })

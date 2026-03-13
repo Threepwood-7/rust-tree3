@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [Unreleased] — 2026-03-13 (pass 3)
+
+### Performance
+
+**Benchmark: `generate --count 30 --max-nodes 9` (release build)**
+
+| Version | Time | Notes |
+|---------|------|-------|
+| pass 2 (fingerprint pre-rejection) | 34.5 s | previous baseline |
+| pass 3 (parallel tree generation + sort) | **20 s** | ~42% further gain |
+
+**Root cause identified via per-position timing:** 74% of runtime was in the
+single-threaded pre-warm phase (tree enumeration for sizes 1–9). The parallel
+scan phase was already fast (~9.3 s total); the bottleneck was generating the
+3.5 M tree library before any search began.
+
+#### Changes
+
+**Parallel tree construction in `compute_trees_of_size`** (`generator.rs`)
+- Once all child-subtree combinations are enumerated (sequential, must read cache
+  for sizes < n), the construction of each `(root_label, combo)` tree is
+  embarrassingly parallel: each pair is fully independent.
+- Changed: collect all `(root_label, &combo)` input pairs cheaply (references, no
+  clones), then `par_iter().map()` the expensive `Tree::from_root_and_children` +
+  `canonicalize` step across all rayon threads.
+- Deduplication now uses `par_sort_unstable` + `dedup_by` instead of a serial
+  `HashSet` insertion loop.
+- Impact: pre-warm phase drops from ~25 s to ~9 s (~2.8× speedup on that phase,
+  consistent with 8-thread machine).
+
+**Parallel candidate list sort** (`generator.rs`)
+- `all_trees_up_to_size_largest_first` / `smallest_first` now use
+  `par_sort_unstable_by` instead of `sort_by`.
+- Sorting 3.5 M entries drops from ~3 s to ~2.1 s.
+
+**Diagnostic print**: added `Parallel workers: N` to startup output so thread
+pool utilization is visible to users.
+
+---
+
 ## [Unreleased] — 2026-03-13 (pass 2)
 
 ### Performance
