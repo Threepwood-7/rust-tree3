@@ -83,6 +83,41 @@ impl Tree {
         self.nodes[node_idx].label
     }
 
+    /// Number of nodes in the subtree rooted at node_idx.
+    pub fn subtree_size(&self, node_idx: usize) -> usize {
+        let mut count = 0;
+        let mut stack = vec![node_idx];
+        while let Some(n) = stack.pop() {
+            count += 1;
+            for &c in &self.nodes[n].children {
+                stack.push(c);
+            }
+        }
+        count
+    }
+
+    /// Precompute subtree sizes for all nodes in O(n).
+    /// Returns a Vec<usize> indexed by node index.
+    pub fn all_subtree_sizes(&self) -> Vec<usize> {
+        let n = self.nodes.len();
+        let mut sizes = vec![1usize; n];
+        // Pre-order traversal to get node order, then accumulate in reverse.
+        let mut order = Vec::with_capacity(n);
+        let mut stack = vec![self.root];
+        while let Some(node) = stack.pop() {
+            order.push(node);
+            for &c in &self.nodes[node].children {
+                stack.push(c);
+            }
+        }
+        for &node in order.iter().rev() {
+            for &c in &self.nodes[node].children {
+                sizes[node] += sizes[c];
+            }
+        }
+        sizes
+    }
+
     /// Build a tree from a root label and a list of child subtrees.
     /// This clones and re-indexes the child subtrees.
     pub fn from_root_and_children(root_label: u32, children: &[Tree]) -> Self {

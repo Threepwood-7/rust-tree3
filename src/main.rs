@@ -3,6 +3,7 @@ mod cli;
 mod embedding;
 mod generator;
 mod svg_render;
+mod tests;
 mod tree;
 
 use clap::Parser;

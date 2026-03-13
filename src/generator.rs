@@ -1,6 +1,7 @@
 use crate::canonical::canonicalize;
 use crate::embedding::embeds;
 use crate::tree::Tree;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -187,40 +188,55 @@ where
     eprintln!("Total candidate trees: {}", total_trees);
     eprintln!();
 
+    // Cache the sorted candidate list to avoid re-sorting millions of trees
+    // at every position once allowed_size stops growing (i.e. once position >= max_nodes).
+    let mut candidates_cache: Option<(usize, Vec<(String, Tree)>)> = None;
+
     for position in 1..=count {
         let allowed_size = position.min(max_nodes);
 
-        // Build candidate list according to strategy
-        let candidates = match strategy {
-            SelectionStrategy::SmallestFirst => {
-                all_trees_up_to_size_smallest_first(allowed_size, k, &mut cache)
-            }
-            SelectionStrategy::LargestFirst => {
-                all_trees_up_to_size_largest_first(allowed_size, k, &mut cache)
-            }
-        };
+        // Reuse the sorted candidate list when allowed_size hasn't changed.
+        let rebuild = candidates_cache
+            .as_ref()
+            .map_or(true, |(cached_size, _)| *cached_size != allowed_size);
 
-        let mut found = false;
-        for (canon, tree) in candidates {
-            if used_canons.contains(&canon) {
-                continue;
-            }
+        if rebuild {
+            let sorted = match strategy {
+                SelectionStrategy::SmallestFirst => {
+                    all_trees_up_to_size_smallest_first(allowed_size, k, &mut cache)
+                }
+                SelectionStrategy::LargestFirst => {
+                    all_trees_up_to_size_largest_first(allowed_size, k, &mut cache)
+                }
+            };
+            candidates_cache = Some((allowed_size, sorted));
+        }
 
-            // Check: does any previously accepted tree embed into this candidate?
-            let valid = !sequence.iter().any(|entry| embeds(&entry.tree, &tree));
+        let candidates = candidates_cache.as_ref().unwrap().1.as_slice();
 
-            if valid {
-                used_canons.insert(canon.clone());
-                let entry = SequenceEntry {
-                    index: sequence.len() + 1,
-                    tree,
-                    canonical: canon,
-                };
-                on_found(&entry);
-                sequence.push(entry);
-                found = true;
-                break;
-            }
+        // Parallel scan: find the first candidate (in strategy order) that is valid.
+        // `find_first` processes in parallel but returns the leftmost match,
+        // preserving deterministic ordering.
+        let found_item = candidates
+            .par_iter()
+            .find_first(|(canon, tree)| {
+                if used_canons.contains(canon) {
+                    return false;
+                }
+                // Check: does any previously accepted tree embed into this candidate?
+                !sequence.iter().any(|entry| embeds(&entry.tree, tree))
+            });
+
+        let found = found_item.is_some();
+        if let Some((canon, tree)) = found_item {
+            used_canons.insert(canon.clone());
+            let entry = SequenceEntry {
+                index: sequence.len() + 1,
+                tree: tree.clone(),
+                canonical: canon.clone(),
+            };
+            on_found(&entry);
+            sequence.push(entry);
         }
 
         if !found {
