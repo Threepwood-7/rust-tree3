@@ -17,7 +17,8 @@ A Rust CLI that **computes and visualizes candidate initial sequences** for Harv
 9. [CLI Reference](#9-cli-reference)
 10. [Example Scripts](#10-example-scripts)
 11. [Output Format](#11-output-format)
-12. [Known Limitations](#12-known-limitations)
+12. [Example Output](#12-example-output)
+13. [Known Limitations](#13-known-limitations)
 
 ---
 
@@ -565,7 +566,33 @@ The `tree` field contains the full arena-serialized structure, allowing reconstr
 
 ---
 
-## 12. Known Limitations
+## 12. Example Output
+
+The files below are real output from `generate --max-nodes 6 --labels 3` (236 trees, largest-first strategy). The full set lives in [`docs/examples/`](docs/examples/).
+
+### Overview grid
+
+`overview.svg` — the live grid rewritten after every acceptance. Each cell shows the T-index, node count, canonical form, and a scaled tree rendering.
+
+![TREE(3) sequence overview — max-nodes 6](docs/examples/overview.svg)
+
+### First five trees
+
+| T1 | T2 | T3 | T4 | T5 |
+|:--:|:--:|:--:|:--:|:--:|
+| ![T1 · 1 node · 1](docs/examples/tree_001.svg) | ![T2 · 2 nodes · 2(2)](docs/examples/tree_002.svg) | ![T3 · 3 nodes · 2(3(3))](docs/examples/tree_003.svg) | ![T4 · 4 nodes · 2(3,3,3)](docs/examples/tree_004.svg) | ![T5 · 5 nodes · 3(2(3),2(3))](docs/examples/tree_005.svg) |
+| `1` | `2(2)` | `2(3(3))` | `2(3,3,3)` | `3(2(3),2(3))` |
+
+### Mid-sequence complexity
+
+| T10 | T50 | T100 | T200 |
+|:---:|:---:|:----:|:----:|
+| ![T10](docs/examples/tree_010.svg) | ![T50](docs/examples/tree_050.svg) | ![T100](docs/examples/tree_100.svg) | ![T200](docs/examples/tree_200.svg) |
+| `3(2(3),3(3,3))` | `3(2,3(3(2,3)))` | `3(3(3(2),3(2)))` | `3(3,3(2,2))` |
+
+---
+
+## 13. Known Limitations
 
 ### Greedy ≠ Optimal
 
