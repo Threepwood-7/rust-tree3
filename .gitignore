@@ -1,2 +1,5 @@
 /target
 Cargo.lock
+/output
+/output2
+/output3
