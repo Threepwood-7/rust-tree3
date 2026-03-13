@@ -6,18 +6,30 @@ Potential future optimizations and features, roughly ordered by expected impact.
 
 ## Performance
 
-### [PERF-1] Permanent candidate pruning
-**Expected impact: High | Complexity: High**
+### [PERF-1] Permanent candidate pruning — ✅ DONE (pass 4)
+**Implemented:** `CandidatePool` with `AtomicBool` rejected bitset + post-acceptance
+parallel sweep. Scan is now O(N) atomic loads; all embedding work is amortized over
+sweeps. Flat arrays (`fingerprints`, `rejected`) pinned in physical RAM via
+`mlock`/`VirtualLock`. See CHANGELOG pass 4.
 
-If accepted tree Tᵢ homeomorphically embeds into candidate C, then C is permanently
-invalid for all future positions too (the sequence can only grow). These permanently
-invalid candidates can be removed from the candidate list up front, shrinking the
-search space for every subsequent position.
+---
 
-Requires building an inverse index: for each candidate, track which accepted trees
-embed into it. Once a candidate is invalidated, remove it from the pool. This turns
-the per-position scan into an incrementally shrinking list rather than a fixed 3.5M
-set.
+### [SCALE-1] Scale to max-nodes=10 with 32 GB RAM
+**Expected impact: Massive (explores 7× more trees, finds much longer sequences)**
+
+Memory budget for a 32 GB machine:
+
+| max-nodes | Candidate trees | Heap (trees) | Fingerprints | Rejected bitset | Total |
+|-----------|----------------|-------------|--------------|-----------------|-------|
+| 9  | 3.5 M  | ~635 MB | ~57 MB  | ~3.4 MB  | ~696 MB  |
+| 10 | 24.5 M | ~4.4 GB | ~398 MB | ~23.4 MB | ~4.8 GB  |
+| 11 | 171 M  | ~30 GB  | ~2.8 GB | ~163 MB  | ~33 GB   |
+
+Running `--max-nodes 10` is fully within budget (~5 GB). Running `--max-nodes 11`
+requires ~33 GB and is borderline. The flat arrays (`fingerprints`, `rejected`) are
+already locked in physical RAM via `mlock`/`VirtualLock` (pass 4); just raise the
+`--max-nodes` flag. The tree heap (~4.4 GB) is not locked and may page under load —
+acceptable since it is accessed sequentially during sweeps.
 
 ---
 

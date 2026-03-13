@@ -144,6 +144,127 @@ pub fn render_svg(tree: &Tree, title: &str) -> String {
     lines.join("\n") + "\n"
 }
 
+/// Render a grid overview of all trees found so far.
+///
+/// Each entry is `(tree, sequence_index, canonical_form)`.
+/// Called after every new acceptance; the file is rewritten in place.
+pub fn render_overview_svg(entries: &[(&Tree, usize, &str)]) -> String {
+    let n = entries.len();
+    if n == 0 {
+        return String::new();
+    }
+
+    // Colors (kept as variables so they never appear inline inside r#"..."# literals,
+    // which would terminate the raw string at the embedded `"#` sequence).
+    let bg_page   = "#1a1a2e";
+    let bg_cell   = "#252540";
+    let stroke_cell = "#3a3a5c";
+    let fg_title  = "#e0e0ff";
+    let fg_canon  = "#8888aa";
+    let edge_col  = "#555577";
+    let node_stroke = "#222244";
+    let text_fill = "#ffffff";
+
+    let cols: usize = 5;
+    let cell_w: f64 = 210.0;
+    let cell_h: f64 = 230.0;
+    let label_h: f64 = 38.0;
+    let gap: f64 = 14.0;
+    let padding: f64 = 20.0;
+
+    let rows = (n + cols - 1) / cols;
+    let total_w = cols as f64 * (cell_w + gap) - gap + 2.0 * padding;
+    let total_h = rows as f64 * (cell_h + label_h + gap) - gap + 2.0 * padding;
+
+    let mut out: Vec<String> = Vec::new();
+    out.push(r#"<?xml version="1.0" encoding="UTF-8"?>"#.to_string());
+    out.push(format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w:.0}" height="{h:.0}" viewBox="0 0 {w:.0} {h:.0}">"#,
+        w = total_w, h = total_h
+    ));
+    out.push(format!(r#"  <rect width="100%" height="100%" fill="{bg}"/>"#, bg = bg_page));
+
+    for (i, (tree, index, canonical)) in entries.iter().enumerate() {
+        let col = i % cols;
+        let row = i / cols;
+        let ox = padding + col as f64 * (cell_w + gap);
+        let oy = padding + row as f64 * (cell_h + label_h + gap);
+
+        // Cell background
+        out.push(format!(
+            r#"  <rect x="{ox:.0}" y="{oy:.0}" width="{cw:.0}" height="{ch:.0}" fill="{bg}" rx="8" stroke="{sc}" stroke-width="1.5"/>"#,
+            ox = ox, oy = oy, cw = cell_w, ch = cell_h + label_h,
+            bg = bg_cell, sc = stroke_cell
+        ));
+
+        // Header: "T1 · 3 nodes"
+        out.push(format!(
+            r#"  <text x="{tx:.0}" y="{ty:.0}" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="{fg}">T{idx} · {nodes} nodes</text>"#,
+            tx = ox + cell_w / 2.0, ty = oy + 15.0,
+            fg = fg_title, idx = index, nodes = tree.nodes.len()
+        ));
+
+        // Canonical form (truncated if long)
+        let canon_show = if canonical.len() > 30 {
+            format!("{}…", &canonical[..27])
+        } else {
+            canonical.to_string()
+        };
+        out.push(format!(
+            r#"  <text x="{tx:.0}" y="{ty:.0}" text-anchor="middle" font-family="monospace" font-size="10" fill="{fg}">{c}</text>"#,
+            tx = ox + cell_w / 2.0, ty = oy + 30.0,
+            fg = fg_canon, c = escape_xml(&canon_show)
+        ));
+
+        // Nested SVG: scales the tree to fill the cell, preserving aspect ratio.
+        let layout = compute_layout(tree);
+        let nat_w = layout.x.iter().cloned().fold(0.0f64, f64::max)
+            + PADDING + NODE_RADIUS + PADDING;
+        let nat_h = layout.y.iter().cloned().fold(0.0f64, f64::max)
+            + NODE_RADIUS + PADDING;
+
+        out.push(format!(
+            r#"  <svg x="{sx:.0}" y="{sy:.0}" width="{sw:.0}" height="{sh:.0}" viewBox="0 0 {vw:.0} {vh:.0}" preserveAspectRatio="xMidYMid meet" overflow="hidden">"#,
+            sx = ox + 5.0, sy = oy + label_h,
+            sw = cell_w - 10.0, sh = cell_h - 5.0,
+            vw = nat_w, vh = nat_h,
+        ));
+
+        // Edges
+        for node_idx in 0..tree.nodes.len() {
+            for &child_idx in &tree.nodes[node_idx].children {
+                out.push(format!(
+                    r#"    <line x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}" stroke="{sc}" stroke-width="2"/>"#,
+                    x1 = layout.x[node_idx], y1 = layout.y[node_idx],
+                    x2 = layout.x[child_idx], y2 = layout.y[child_idx],
+                    sc = edge_col,
+                ));
+            }
+        }
+
+        // Nodes
+        for node_idx in 0..tree.nodes.len() {
+            let nx = layout.x[node_idx];
+            let ny = layout.y[node_idx];
+            let label = tree.nodes[node_idx].label;
+            let color = label_color(label);
+            out.push(format!(
+                r#"    <circle cx="{nx:.1}" cy="{ny:.1}" r="{r}" fill="{color}" stroke="{sc}" stroke-width="1.5"/>"#,
+                nx = nx, ny = ny, r = NODE_RADIUS, color = color, sc = node_stroke
+            ));
+            out.push(format!(
+                r#"    <text x="{nx:.1}" y="{ny:.1}" text-anchor="middle" dominant-baseline="middle" font-family="monospace" font-size="14" font-weight="bold" fill="{fill}">{label}</text>"#,
+                nx = nx, ny = ny, fill = text_fill, label = label
+            ));
+        }
+
+        out.push("  </svg>".to_string());
+    }
+
+    out.push("</svg>".to_string());
+    out.join("\n") + "\n"
+}
+
 fn escape_xml(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")

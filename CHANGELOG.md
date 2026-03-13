@@ -4,6 +4,64 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [Unreleased] — 2026-03-13 (pass 4)
+
+### Performance
+
+**Strategy: permanent candidate pruning + physical RAM pinning**
+
+Each accepted tree Tᵢ is used to sweep ALL remaining candidates in parallel
+immediately after acceptance. Any candidate C where Tᵢ homeomorphically embeds
+into C is permanently banned — marked in a bitset — and skipped at every future
+position with a single atomic load. The candidate pool monotonically shrinks
+rather than being fully re-evaluated at each position.
+
+#### Changes
+
+**`CandidatePool` struct** (`generator.rs`)
+- Replaces the plain `Vec<(String, Tree)>` + ad-hoc `HashSet<canon>` with a
+  self-contained pool holding three parallel arrays:
+  - `entries: Vec<(String, Tree)>` — strategy-sorted candidates (unchanged)
+  - `fingerprints: Vec<TreeFingerprint>` — pre-computed once at pool build;
+    eliminates fingerprint recomputation on every sweep and scan
+  - `rejected: Vec<AtomicBool>` — permanent rejection bitset; 1 byte per
+    candidate, ~24 MB for 24.5 M trees (max-nodes=10)
+- `AtomicBool` interior mutability: both the parallel sweep (`par_iter +
+  for_each`) and the parallel scan (`par_iter + find_first`) take `&self` —
+  no mutex, no pool-level lock.
+
+**Post-acceptance sweep** (`CandidatePool::sweep`)
+- After accepting Tᵢ, `par_iter().for_each()` over all non-rejected candidates:
+  fingerprint gate (O(1)) then `embeds(Tᵢ, C)` — marks C rejected on match.
+- Self-embedding catches the "don't reuse a canonical form" case automatically;
+  the separate `used_canons: HashSet` is eliminated.
+- Sweep result (newly rejected count) printed to stderr per position.
+
+**O(N)-scan positions** (`CandidatePool::find_first_live`)
+- Scan is now a single `par_iter().find_first()` over the `rejected` bitset.
+  No fingerprint computation, no embedding check at scan time — all that work
+  was done during previous sweeps.
+
+**Physical RAM pinning** (`src/memlock.rs`, new)
+- `try_lock_in_ram<T>(slice, label)`: platform-specific best-effort page locking.
+  - Windows: `SetProcessWorkingSetSizeEx` to expand the working set, then
+    `VirtualLock` to pin pages (requires "Lock pages in memory" privilege for
+    large regions; failure is non-fatal).
+  - Unix: `mlock` (requires `CAP_IPC_LOCK` or `RLIMIT_MEMLOCK` headroom;
+    failure is non-fatal).
+- The two flat arrays (`fingerprints`, `rejected`) are locked at pool construction
+  time. These are the hottest data touched by every sweep and scan; pinning them
+  prevents OS page-out under memory pressure.
+- Memory footprint at max-nodes=10: fingerprints ~398 MB + rejected ~23 MB
+  = ~421 MB of locked flat arrays; tree objects live in normal heap.
+
+**Pool rebuild on `allowed_size` change**
+- When the pool is rebuilt (positions 1..max_nodes as `allowed_size` grows),
+  all previously accepted trees are replayed as sweeps to initialize the new
+  pool's rejection bitset before the first scan of that size tier.
+
+---
+
 ## [Unreleased] — 2026-03-13 (pass 3)
 
 ### Performance

@@ -3,6 +3,7 @@ mod cli;
 mod embedding;
 mod fingerprint;
 mod generator;
+mod memlock;
 mod svg_render;
 mod tests;
 mod tree;
@@ -13,7 +14,7 @@ use generator::{generate_sequence, SelectionStrategy};
 use serde_json;
 use std::fs;
 use std::path::Path;
-use svg_render::render_svg;
+use svg_render::{render_overview_svg, render_svg};
 
 fn main() {
     let cli = Cli::parse();
@@ -44,6 +45,10 @@ fn run_generate(args: cli::GenerateArgs) {
         std::process::exit(1);
     }
 
+    // Accumulates (tree, index, canonical) for the live overview.
+    let mut overview: Vec<(crate::tree::Tree, usize, String)> = Vec::new();
+    let overview_path = out_dir.join("overview.svg");
+
     let sequence = generate_sequence(
         args.count,
         args.max_nodes,
@@ -57,7 +62,7 @@ fn run_generate(args: cli::GenerateArgs) {
                 entry.canonical
             );
 
-            // Write SVG
+            // Write individual SVG
             let svg_path = out_dir.join(format!("tree_{:03}.svg", entry.index));
             let title = format!(
                 "T{} ({} nodes): {}",
@@ -68,6 +73,16 @@ fn run_generate(args: cli::GenerateArgs) {
             let svg = render_svg(&entry.tree, &title);
             if let Err(e) = fs::write(&svg_path, svg) {
                 eprintln!("Warning: failed to write {}: {}", svg_path.display(), e);
+            }
+
+            // Rewrite overview.svg with all trees found so far
+            overview.push((entry.tree.clone(), entry.index, entry.canonical.clone()));
+            let refs: Vec<(&crate::tree::Tree, usize, &str)> = overview
+                .iter()
+                .map(|(t, i, c)| (t, *i, c.as_str()))
+                .collect();
+            if let Err(e) = fs::write(&overview_path, render_overview_svg(&refs)) {
+                eprintln!("Warning: failed to write overview.svg: {}", e);
             }
         },
     );
