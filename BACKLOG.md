@@ -105,6 +105,78 @@ become useful with multi-pass strategies or when re-evaluating trees after pruni
 
 ## Features
 
+### [EXPLORE-1] Random strategy + `--seed`
+**Expected impact: Medium | Complexity: Low**
+
+Add a `random` selection strategy: at each position, pick a uniformly random valid
+candidate from the live pool instead of the first in sorted order. Add a `--seed N`
+flag (seeds the RNG) for reproducible runs. Implementation: count live candidates,
+pick a random index, walk the rejected bitset to find it. Each run explores a
+different path through the search space; useful for sampling the distribution of
+valid sequences and discovering paths that greedy misses.
+
+---
+
+### [EXPLORE-2] `min-reject` strategy (most conservative)
+**Expected impact: Potentially high | Complexity: Medium**
+
+At each position, among all live candidates, pick the one that would eliminate the
+**fewest** remaining candidates if accepted — i.e., the tree whose post-acceptance
+sweep marks the smallest number of rejections. This "keep options open" heuristic
+may produce significantly longer sequences than greedy-largest by deferring
+constraint tightening as long as possible.
+
+Implementation: for each live candidate C, simulate `sweep(C)` and count new
+rejections (without committing); pick the C with the minimum count. Cost is
+O(live² × embedding) per position in the worst case, but the fingerprint gate
+makes most sweeps very cheap. Can be bounded by evaluating only the top-K
+candidates by size to limit cost.
+
+---
+
+### [EXPLORE-3] `max-reject` strategy (most aggressive)
+**Expected impact: Medium | Complexity: Low (same code as EXPLORE-2)**
+
+Mirror of EXPLORE-2: pick the candidate whose sweep eliminates the **most**
+remaining candidates. Burns through the pool aggressively early, potentially
+reaching a natural termination faster but with a longer sequence up to that point
+(large trees accepted early → fewer conflicts later). Shares almost all
+implementation with EXPLORE-2; just flip the min/max comparison.
+
+---
+
+### [EXPLORE-4] Beam search (`--beam-width W`)
+**Expected impact: Highest | Complexity: High**
+
+Maintain W partial sequences simultaneously. At each step, expand each beam by
+evaluating its top candidates; keep the W longest-running sequences overall.
+Properly explores the branching structure of the search space rather than
+committing greedily to one path.
+
+Implementation requires W independent `CandidatePool` instances (each with its own
+rejected bitset reflecting that beam's acceptance history). Memory cost: W ×
+(fingerprint array + rejected bitset) ≈ W × 420 MB at max-nodes=10. With W=4 that
+is ~1.7 GB of flat arrays plus W copies of the tree heap.
+
+Suggested approach: restructure `generate_sequence` into a `Beam` struct holding
+a `Vec<(Vec<SequenceEntry>, CandidatePool)>`; at each step, each beam picks its
+own best candidate, sweeps its own pool, and the beams are ranked by current
+length. Beams that terminate early are dropped; new beams can be seeded from the
+longest surviving one.
+
+---
+
+### [EXPLORE-5] `partial.json` live output
+**Expected impact: High practical utility | Complexity: Very low**
+
+Rewrite `partial.json` (same format as `sequence.json`) after every acceptance,
+alongside the existing per-tree SVG writes. If the run is interrupted (Ctrl+C,
+OOM, timeout), the file on disk reflects the longest sequence found so far.
+The existing `on_found` callback already has everything needed; just add a
+`fs::write` call mirroring the overview SVG rewrite.
+
+---
+
 ### [FEAT-1] Interactive HTML viewer
 Serve the generated SVGs as a single-page HTML file with a grid layout, zoom,
 and click-to-highlight embedding relationships between trees.
