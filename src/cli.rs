@@ -23,6 +23,8 @@ pub enum StrategyArg {
     Smallest,
     /// Greedily pick largest valid tree at each position (uses full node budget early)
     Largest,
+    /// Pick a uniformly random valid tree at each position
+    Random,
 }
 
 #[derive(clap::Args, Debug)]
@@ -47,7 +49,11 @@ pub struct GenerateArgs {
     #[arg(long)]
     pub export_json: bool,
 
-    /// Greedy selection strategy: smallest (pick smallest valid tree) or largest
+    /// Greedy selection strategy: smallest, largest, or random
     #[arg(long, default_value = "largest")]
     pub strategy: StrategyArg,
+
+    /// RNG seed for the random strategy (omit for a time-based seed)
+    #[arg(long)]
+    pub seed: Option<u64>,
 }

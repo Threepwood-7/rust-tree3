@@ -105,15 +105,11 @@ become useful with multi-pass strategies or when re-evaluating trees after pruni
 
 ## Features
 
-### [EXPLORE-1] Random strategy + `--seed`
-**Expected impact: Medium | Complexity: Low**
-
-Add a `random` selection strategy: at each position, pick a uniformly random valid
-candidate from the live pool instead of the first in sorted order. Add a `--seed N`
-flag (seeds the RNG) for reproducible runs. Implementation: count live candidates,
-pick a random index, walk the rejected bitset to find it. Each run explores a
-different path through the search space; useful for sampling the distribution of
-valid sequences and discovering paths that greedy misses.
+### [EXPLORE-1] Random strategy + `--seed` — ✅ DONE
+**Implemented:** `--strategy random` + `--seed N` flag. Uses an internal xorshift64
+RNG (no external dependency). Omitting `--seed` produces a time-based seed printed
+to stderr for reproducibility. Pool backing order is largest-first; random pick is
+applied at scan time via `find_random_live()`.
 
 ---
 

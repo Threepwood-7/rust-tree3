@@ -28,6 +28,7 @@ fn run_generate(args: cli::GenerateArgs) {
     let strategy = match args.strategy {
         StrategyArg::Smallest => SelectionStrategy::SmallestFirst,
         StrategyArg::Largest => SelectionStrategy::LargestFirst,
+        StrategyArg::Random => SelectionStrategy::Random,
     };
 
     let count = args.count.unwrap_or(usize::MAX);
@@ -62,6 +63,7 @@ fn run_generate(args: cli::GenerateArgs) {
         args.max_nodes,
         args.labels,
         strategy,
+        args.seed,
         |entry| {
             println!(
                 "[{:03}] Found tree ({} nodes): {}",

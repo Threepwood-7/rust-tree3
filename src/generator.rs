@@ -151,6 +151,30 @@ pub enum SelectionStrategy {
     SmallestFirst,
     /// Pick the largest valid tree first (largest trees used as early as possible).
     LargestFirst,
+    /// Pick a uniformly random valid tree at each position.
+    Random,
+}
+
+/// Minimal xorshift64 RNG — no external dependency.
+pub struct Rng(u64);
+
+impl Rng {
+    pub fn new(seed: u64) -> Self {
+        // Ensure the state is never zero.
+        Self(if seed == 0 { 0x123456789abcdef1 } else { seed })
+    }
+
+    pub fn next_u64(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    /// Uniform random index in `0..n`.
+    pub fn next_usize(&mut self, n: usize) -> usize {
+        (self.next_u64() % n as u64) as usize
+    }
 }
 
 /// Result of a sequence generation step.
@@ -249,6 +273,26 @@ impl CandidatePool {
             .find_first(|(i, _)| !self.rejected[*i].load(Ordering::Relaxed))
             .map(|(i, (canon, tree))| (i, canon, tree))
     }
+
+    /// Pick a uniformly random non-rejected candidate.
+    /// Two-pass: count live entries, then walk to the chosen offset.
+    fn find_random_live(&self, rng: &mut Rng) -> Option<(usize, &String, &Tree)> {
+        let live = self.live_count();
+        if live == 0 {
+            return None;
+        }
+        let target = rng.next_usize(live);
+        let mut seen = 0usize;
+        for (i, (canon, tree)) in self.entries.iter().enumerate() {
+            if !self.rejected[i].load(Ordering::Relaxed) {
+                if seen == target {
+                    return Some((i, canon, tree));
+                }
+                seen += 1;
+            }
+        }
+        None
+    }
 }
 
 // ── Sequence generation ───────────────────────────────────────────────────────
@@ -265,6 +309,7 @@ pub fn generate_sequence<F>(
     max_nodes: usize,
     k: u32,
     strategy: SelectionStrategy,
+    seed: Option<u64>,
     mut on_found: F,
 ) -> Vec<SequenceEntry>
 where
@@ -272,6 +317,23 @@ where
 {
     let mut sequence: Vec<SequenceEntry> = Vec::new();
     let mut cache: TreeCache = HashMap::new();
+
+    // Initialise RNG for the Random strategy.
+    // Seed: explicit --seed value, or mix of system time + thread id for variety.
+    let mut rng = {
+        let s = seed.unwrap_or_else(|| {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let t = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0xdeadbeef);
+            t.wrapping_mul(0x9e3779b97f4a7c15)
+        });
+        if matches!(strategy, SelectionStrategy::Random) {
+            eprintln!("RNG seed: {}", s);
+        }
+        Rng::new(s)
+    };
 
     // Pre-warm: enumerate all trees up to max_nodes once.
     eprintln!("Pre-computing tree library (up to {} nodes, {} labels)...", max_nodes, k);
@@ -299,7 +361,9 @@ where
                 SelectionStrategy::SmallestFirst => {
                     all_trees_up_to_size_smallest_first(allowed_size, k, &mut cache)
                 }
-                SelectionStrategy::LargestFirst => {
+                // Random uses largest-first as the backing order; selection is
+                // randomised at pick time, not at sort time.
+                SelectionStrategy::LargestFirst | SelectionStrategy::Random => {
                     all_trees_up_to_size_largest_first(allowed_size, k, &mut cache)
                 }
             };
@@ -333,10 +397,12 @@ where
 
         let (_, ref pool) = pool_cache.as_ref().unwrap();
 
-        // Scan: find the first non-rejected candidate in strategy order.
-        // All embedding work for previous accepted trees was done during their sweeps,
-        // so this reduces to an O(N) pass over the `rejected` bitset in physical RAM.
-        match pool.find_first_live() {
+        // Scan: pick the next candidate according to strategy.
+        let found = match strategy {
+            SelectionStrategy::Random => pool.find_random_live(&mut rng),
+            _ => pool.find_first_live(),
+        };
+        match found {
             None => {
                 eprintln!(
                     "Note: sequence ended at position {} (no valid tree with <= {} nodes found).",
