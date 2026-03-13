@@ -27,9 +27,9 @@ pub enum StrategyArg {
 
 #[derive(clap::Args, Debug)]
 pub struct GenerateArgs {
-    /// Number of trees to generate
-    #[arg(long, default_value_t = 10)]
-    pub count: usize,
+    /// Number of trees to generate (omit to run until no valid tree remains)
+    #[arg(long)]
+    pub count: Option<usize>,
 
     /// Maximum number of nodes per tree (hard cap, independent of i-node rule)
     #[arg(long, default_value_t = 8)]

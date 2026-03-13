@@ -30,11 +30,19 @@ fn run_generate(args: cli::GenerateArgs) {
         StrategyArg::Largest => SelectionStrategy::LargestFirst,
     };
 
+    let count = args.count.unwrap_or(usize::MAX);
+
     println!("=== TREE({}) Sequence Explorer ===", args.labels);
-    println!(
-        "Generating up to {} trees (i-th tree has <= i nodes, hard cap = {} nodes)",
-        args.count, args.max_nodes
-    );
+    match args.count {
+        Some(n) => println!(
+            "Generating up to {} trees (i-th tree has <= i nodes, hard cap = {} nodes)",
+            n, args.max_nodes
+        ),
+        None => println!(
+            "Generating until exhausted (i-th tree has <= i nodes, hard cap = {} nodes)",
+            args.max_nodes
+        ),
+    }
     println!("Strategy: {:?}", args.strategy);
     println!();
 
@@ -50,7 +58,7 @@ fn run_generate(args: cli::GenerateArgs) {
     let overview_path = out_dir.join("overview.svg");
 
     let sequence = generate_sequence(
-        args.count,
+        count,
         args.max_nodes,
         args.labels,
         strategy,
