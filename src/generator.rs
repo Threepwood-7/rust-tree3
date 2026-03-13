@@ -1,5 +1,6 @@
 use crate::canonical::canonicalize;
 use crate::embedding::embeds;
+use crate::fingerprint::TreeFingerprint;
 use crate::tree::Tree;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -154,6 +155,8 @@ pub struct SequenceEntry {
     pub index: usize,
     pub tree: Tree,
     pub canonical: String,
+    /// Precomputed fingerprint for fast embedding pre-rejection in future checks.
+    pub fingerprint: TreeFingerprint,
 }
 
 /// Generate a valid TREE(k) sequence up to `count` trees.
@@ -217,23 +220,38 @@ where
         // Parallel scan: find the first candidate (in strategy order) that is valid.
         // `find_first` processes in parallel but returns the leftmost match,
         // preserving deterministic ordering.
+        //
+        // For each candidate:
+        //   1. Compute its fingerprint once.
+        //   2. Use fingerprint pre-rejection against every accepted tree before
+        //      falling back to the full backtracking embeds() check.
+        //   3. The inner sequence check also runs in parallel (par_iter().any()).
         let found_item = candidates
             .par_iter()
-            .find_first(|(canon, tree)| {
+            .find_first(|(canon, candidate_tree)| {
                 if used_canons.contains(canon) {
                     return false;
                 }
-                // Check: does any previously accepted tree embed into this candidate?
-                !sequence.iter().any(|entry| embeds(&entry.tree, tree))
+                let cand_fp = TreeFingerprint::compute(candidate_tree);
+                // Does any previously accepted tree embed into this candidate?
+                // Inner loop is sequential: outer par_iter already saturates all
+                // threads, so nested par_iter adds overhead without more parallelism.
+                !sequence.iter().any(|entry| {
+                    // Fast fingerprint gate before the expensive backtracking check.
+                    TreeFingerprint::compatible(&entry.fingerprint, &cand_fp)
+                        && embeds(&entry.tree, candidate_tree)
+                })
             });
 
         let found = found_item.is_some();
         if let Some((canon, tree)) = found_item {
+            let fingerprint = TreeFingerprint::compute(tree);
             used_canons.insert(canon.clone());
             let entry = SequenceEntry {
                 index: sequence.len() + 1,
                 tree: tree.clone(),
                 canonical: canon.clone(),
+                fingerprint,
             };
             on_found(&entry);
             sequence.push(entry);

@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ---
 
-## [Unreleased] — 2026-03-13
+## [Unreleased] — 2026-03-13 (pass 2)
 
 ### Performance
 
@@ -57,6 +57,44 @@ Added `src/tests.rs` with 25 unit tests across three modules:
 - **`embedding_tests`** (13 tests): trivial cases, structural embedding, label mismatch, branch distinctness, sequence invariant verification, reflexivity.
 - **`canonical_tests`** (5 tests): single nodes, chains, child sorting, nested sorting, known sequence spot-checks.
 - **`generator_tests`** (7 tests): TREE(1)=1, TREE(2)=3, node budget enforcement, sequence invariant (both strategies), regression test locking the first 7 canonical forms under the largest strategy.
+
+---
+
+## [Unreleased] — 2026-03-13 (pass 1)
+
+### Performance
+
+**Benchmark: `generate --count 30 --max-nodes 9` (release build)**
+
+| Version | Time | Notes |
+|---------|------|-------|
+| pass 1 (candidate caching + precomputed sizes) | 38 s | previous baseline |
+| pass 2 (fingerprint pre-rejection) | **34.5 s** | ~10% further gain |
+
+#### Changes
+
+**Stack-allocated `TreeFingerprint`** (`src/fingerprint.rs`, new)
+- Added `TreeFingerprint`: a 17-byte `Copy` struct computed per accepted tree and
+  per candidate in the parallel scan. Zero heap allocations.
+- Fields: `size`, `label_counts[8]`, `max_degree_per_label[8]`.
+- `compatible(a, b)` is an O(1) gate before calling `embeds()`: rejects pairs
+  where the widest A-node for any label exceeds the widest B-node for that label.
+  This is a necessary condition for embedding (each A-child needs a distinct branch
+  in B). Catches cases that pass the label-count filter but fail on degree.
+- `fingerprint` stored in `SequenceEntry` so accepted trees pay the computation
+  cost once; candidates compute it once per scan closure.
+
+**Parallel inner loop: investigated, reverted**
+- Tested `sequence.par_iter().any()` nested inside `candidates.par_iter().find_first()`.
+- No speedup: when outer par_iter saturates the rayon thread pool, inner par_iter
+  tasks are processed inline (sequentially). Documented in `BACKLOG.md` [PERF-5]
+  with conditions under which it could help in the future.
+
+### Added
+
+- `BACKLOG.md`: documented remaining performance ideas and features, including
+  GPU (investigated — not viable due to recursive backtracking structure) and
+  non-viable approaches with explanations.
 
 ---
 

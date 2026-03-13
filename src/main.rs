@@ -1,6 +1,7 @@
 mod canonical;
 mod cli;
 mod embedding;
+mod fingerprint;
 mod generator;
 mod svg_render;
 mod tests;
