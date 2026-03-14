@@ -244,16 +244,16 @@ let allowed_size = position.min(max_nodes);
 
 The `--max-nodes` flag provides a hard cap on top of this, preventing the tool from needing to enumerate millions of trees for large positions.
 
-### 4.7 Greedy Selection Strategies
+### 4.7 Selection Strategies
 
-Because finding the *true* TREE(k) sequence would require exhaustive search (which is computationally infeasible), the tool uses a **greedy approach**: at each position, pick the first valid candidate according to a chosen ordering.
+Four strategies control how candidates are chosen at each position:
 
-Two strategies are provided:
+- **`largest`** (default): Greedy — pick the largest valid tree first. Tends to produce longer sequences because larger trees are harder to embed into later ones.
+- **`smallest`**: Greedy — pick the smallest valid tree first. Produces shorter but structurally simpler sequences; useful for exploring the minimum-complexity end of the search space.
+- **`random`**: Greedy — pick a uniformly random valid tree at each position. Each run explores a different region of the search space. Use `--seed N` for reproducible results.
+- **`optimal`**: Exhaustive DFS backtracking — finds the **longest possible** valid sequence within the given node budget. Exponential time; practical only for `--max-nodes ≤ 6` with k=3. See section 4.10.
 
-- **`largest`** (default): Try largest trees first. This tends to produce longer valid sequences because larger trees are harder to embed into later ones, leaving more "room" for future trees.
-- **`smallest`**: Try smallest trees first. Produces shorter but structurally simpler sequences. Useful for exploring the minimum-complexity end of the search space.
-
-Neither strategy is guaranteed to produce the longest possible sequence — that is an NP-hard search problem.
+The three greedy strategies are not guaranteed to produce the longest possible sequence.
 
 ### 4.8 Memory Allocation Strategy
 
@@ -274,7 +274,26 @@ Both are locked into physical RAM at construction (`VirtualLock` on Windows, `ml
 
 The pool is rebuilt only when `allowed_size` increases (positions 1 through `max_nodes`). Once it plateaus, the same locked arrays are reused for all remaining positions — no re-allocation, no re-locking.
 
-### 4.9 SVG Layout: Recursive Centering
+### 4.10 Optimal Search: Exhaustive DFS with Precomputed Embedding Map
+
+`--strategy optimal` runs a full backtracking search to find the longest valid sequence:
+
+1. **Precompute `embeds_into[i]`** (parallel, O(N²)): for each candidate i, the list of candidates j where `embeds(tree_i, tree_j)`. Built once upfront; uses the fingerprint gate for fast rejection.
+2. **Refcount rejection** (`Vec<u32>`): `rejected[j]` counts how many currently-accepted ancestors force j to be unavailable. Accept = increment; backtrack = decrement. No cloning needed.
+3. **Upper-bound pruning**: if `current_len + live_count ≤ best_len`, prune — even using every remaining candidate cannot beat the known best.
+4. **Largest-first ordering**: DFS finds strong solutions early, tightening the bound and pruning more branches.
+5. **Incremental output**: `on_new_best` fires and writes SVGs each time a strictly longer sequence is found.
+
+Practical limits for k=3:
+
+| `--max-nodes` | N | Precompute | DFS |
+|---|---|---|---|
+| 4 | ~303 | instant | instant |
+| 5 | ~1,788 | < 1 s | seconds |
+| 6 | ~11,220 | ~30 s | minutes–hours |
+| 7 | ~73,845 | minutes | impractical |
+
+### 4.11 SVG Layout: Recursive Centering
 
 The SVG renderer uses a simplified **Reingold-Tilford-style** layout:
 
@@ -315,11 +334,19 @@ tree3-explorer/
 │   ├── memlock.rs     — physical RAM pinning (mlock / VirtualLock)
 │   └── svg_render.rs  — layout, per-tree SVG, live overview SVG
 └── scripts/
+    ├── rebuild.cmd
     ├── run_basic.cmd
     ├── run_tree1.cmd
     ├── run_tree2.cmd
+    ├── run_smallest_strategy.cmd
+    ├── run_random.cmd
+    ├── run_random_seed.cmd
+    ├── run_exhausted.cmd
+    ├── run_medium.cmd
     ├── run_large.cmd
-    └── run_smallest_strategy.cmd
+    ├── run_optimal_tree2.cmd
+    ├── run_optimal_small.cmd
+    └── run_optimal_medium.cmd
 ```
 
 ### Data Flow
@@ -405,6 +432,7 @@ Format: `label(child1,child2,...)` with children sorted lexicographically. Leave
 | `CandidatePool::sweep(accepted, fp)` | Parallel post-acceptance sweep — marks all candidates that `accepted` embeds into as permanently rejected |
 | `CandidatePool::find_first_live()` | O(N) parallel scan over the rejection bitset; returns the first non-rejected candidate in strategy order |
 | `generate_sequence(count, max_nodes, k, strategy, callback)` | Full sequence search; calls `callback` immediately on each acceptance |
+| `generate_sequence_optimal(count, max_nodes, k, on_new_best)` | Exhaustive DFS backtracking; calls `on_new_best` each time a longer sequence is found |
 
 ### `svg_render.rs`
 
@@ -504,6 +532,22 @@ cargo run -- generate --count 20 --strategy largest --out ./output/largest
 
 # Smallest-first — picks simplest valid trees, tends to terminate sooner
 cargo run -- generate --count 20 --strategy smallest --out ./output/smallest
+
+# Random — different sequence each run
+cargo run -- generate --count 20 --strategy random --out ./output/random
+
+# Random with fixed seed — reproducible
+cargo run -- generate --count 20 --strategy random --seed 42 --out ./output/random_seed
+```
+
+### Optimal exhaustive search
+
+```bash
+# Find the longest valid sequence with max 5 nodes (fast, seconds)
+cargo run -- generate --strategy optimal --labels 3 --max-nodes 5 --out ./output/optimal
+
+# Confirm TREE(2) = 3 by exhaustive search
+cargo run -- generate --strategy optimal --labels 2 --max-nodes 5 --out ./output/optimal_tree2
 ```
 
 ---
@@ -521,7 +565,8 @@ tree3 generate [OPTIONS]
 | `--labels N` | 3 | Label alphabet size; labels are `1..=N` |
 | `--out PATH` | `./output` | Directory for SVG output files |
 | `--export-json` | off | Also write `sequence.json` to the output directory |
-| `--strategy` | `largest` | `largest` or `smallest` — greedy selection order |
+| `--strategy` | `largest` | `largest`, `smallest`, `random`, or `optimal` |
+| `--seed N` | *(none)* | RNG seed for `--strategy random`; omit for a time-based seed |
 
 ### The i-node rule vs `--max-nodes`
 
@@ -630,9 +675,9 @@ Real output from `generate --max-nodes 6 --labels 3` (236 trees, largest-first s
 
 ## 13. Known Limitations
 
-### Greedy ≠ Optimal
+### Greedy ≠ Optimal (for `largest`, `smallest`, `random`)
 
-The tool uses a **greedy algorithm** — it picks the first valid tree according to the chosen strategy at each position. This does not guarantee the longest possible sequence. Finding the true longest sequence is equivalent to an exponential-time search. The output is a *valid candidate sequence*, not the definitive TREE(3) sequence.
+The three greedy strategies pick one candidate per position without backtracking. They do not guarantee the longest possible sequence. Use `--strategy optimal` for an exhaustive search — but note it is exponential time and only practical for small node budgets (see section 4.10).
 
 ### Practical Depth
 
@@ -652,8 +697,6 @@ The two flat arrays (fingerprints + rejection bitset) are locked in physical RAM
 - **Kruskal's Tree Theorem** (1960): For any k, every infinite sequence of k-labeled rooted trees contains a pair Tᵢ, Tⱼ (i < j) where Tᵢ embeds into Tⱼ. This guarantees TREE(k) is finite.
 - **Harvey Friedman** showed that TREE(3) is so large it is unprovable in ordinary mathematics (Peano Arithmetic and much stronger systems). Its finiteness is provable in stronger set theories.
 - The growth rate of TREE(k) corresponds to the **small Veblen ordinal** in the fast-growing hierarchy — far beyond the Ackermann function, Graham's number, or any tower of towers.
-
----
 
 ---
 
