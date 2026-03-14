@@ -255,7 +255,26 @@ Two strategies are provided:
 
 Neither strategy is guaranteed to produce the longest possible sequence — that is an NP-hard search problem.
 
-### 4.8 SVG Layout: Recursive Centering
+### 4.8 Memory Allocation Strategy
+
+Memory use splits into two distinct phases:
+
+**Pre-warm phase (allocation-heavy):** `all_trees_of_size_cached` recursively builds every distinct tree via `graft`, which clones and re-indexes child subtrees. Each `Tree` is a `Vec<Node>` on the heap; the `TreeCache` (`HashMap<(size, k), Vec<(String, Tree)>>`) holds the canonical copies and callers own separate clones. For `--max-nodes 8` this produces ~502k trees; for 10, ~24.5M.
+
+**Hot loop (nearly allocation-free):** Once `CandidatePool` is built, each position only atomically reads/writes two flat arrays:
+
+| Array | Type | Size (8-node default) | Pinned in RAM |
+|---|---|---|---|
+| `fingerprints` | `Vec<TreeFingerprint>` (17-byte `Copy`) | ~8 MB | Yes |
+| `rejected` | `Vec<AtomicBool>` | ~502 KB | Yes |
+
+Both are locked into physical RAM at construction (`VirtualLock` on Windows, `mlock` on Unix) so the OS cannot page them to swap. On Windows the process working set is expanded first via `SetProcessWorkingSetSizeEx`. Failure is non-fatal — execution continues with OS-managed memory.
+
+`TreeFingerprint` itself is entirely **stack-allocated** (17 bytes, `Copy`) — no heap involvement in the O(1) pre-rejection gate.
+
+The pool is rebuilt only when `allowed_size` increases (positions 1 through `max_nodes`). Once it plateaus, the same locked arrays are reused for all remaining positions — no re-allocation, no re-locking.
+
+### 4.9 SVG Layout: Recursive Centering
 
 The SVG renderer uses a simplified **Reingold-Tilford-style** layout:
 
@@ -618,10 +637,6 @@ The tool uses a **greedy algorithm** — it picks the first valid tree according
 | 11 | ~171 M | ~33 GB | Borderline on 32 GB; not recommended |
 
 The two flat arrays (fingerprints + rejection bitset) are locked in physical RAM via `mlock`/`VirtualLock` at startup. On Windows, run as Administrator or grant "Lock pages in memory" for regions above ~1 GB; the program continues without locking on failure.
-
-### Greedy ≠ Optimal
-
-The tool uses a **greedy algorithm** and does not backtrack. It produces a *valid candidate sequence*, not the longest possible one. Finding the true longest sequence is an exponential-time problem.
 
 ---
 
