@@ -29,6 +29,7 @@ A Rust CLI that **computes and visualizes candidate initial sequences** for Harv
 11. [Output Format](#11-output-format)
 12. [Example Output](#12-example-output)
 13. [Known Limitations](#13-known-limitations)
+14. [References](#references)
 
 ---
 
@@ -69,7 +70,12 @@ With 3 labels, the combinatorial space of labeled trees grows much faster than w
 
 ## 2. Original Specification
 
-The design of this tool is based on a formal engineering specification: [`TREE3_spec2.md`](TREE3_spec2.md). Key prescriptions:
+The design of this tool is based on two specifications:
+
+- [`docs/TREE3_spec.md`](docs/TREE3_spec.md) — Python-oriented initial specification (data model, embedding algorithm, visualization approach)
+- [`docs/TREE3_spec2.md`](docs/TREE3_spec2.md) — Rust engineering specification (architecture, libraries, CLI, modules)
+
+Key prescriptions from the Rust spec:
 
 ### Language: Rust
 
@@ -624,6 +630,34 @@ The tool uses a **greedy algorithm** and does not backtrack. It produces a *vali
 - **Kruskal's Tree Theorem** (1960): For any k, every infinite sequence of k-labeled rooted trees contains a pair Tᵢ, Tⱼ (i < j) where Tᵢ embeds into Tⱼ. This guarantees TREE(k) is finite.
 - **Harvey Friedman** showed that TREE(3) is so large it is unprovable in ordinary mathematics (Peano Arithmetic and much stronger systems). Its finiteness is provable in stronger set theories.
 - The growth rate of TREE(k) corresponds to the **small Veblen ordinal** in the fast-growing hierarchy — far beyond the Ackermann function, Graham's number, or any tower of towers.
+
+---
+
+---
+
+## References
+
+### Mathematics
+
+1. Wikipedia — [Kruskal's Tree Theorem](https://en.wikipedia.org/wiki/Kruskal%27s_tree_theorem) — primary reference for the TREE function, sequence definition, and finiteness proof
+2. Wikipedia — [Fast-growing hierarchy](https://en.wikipedia.org/wiki/Fast-growing_hierarchy) — context for the growth rate of TREE(3) relative to other large numbers
+3. Wikipedia — [Small Veblen ordinal](https://en.wikipedia.org/wiki/Small_Veblen_ordinal) — the ordinal corresponding to TREE(3)'s growth rate in the fast-growing hierarchy
+4. Wikipedia — [Homeomorphism (graph theory)](https://en.wikipedia.org/wiki/Homeomorphism_(graph_theory)) — formal definition of homeomorphic embedding used in the embedding check
+5. Wikipedia — [Graph minor](https://en.wikipedia.org/wiki/Graph_minor) — background on topological minors and tree embeddings
+6. Harvey Friedman — [Finite Trees and the Necessary Use of Large Cardinals](https://u.osu.edu/friedman.8/files/2014/01/FinTreNec98-1ia73bv.pdf) (PDF, Ohio State) — original paper establishing TREE(3)'s unprovability in Peano Arithmetic
+7. Harvey Friedman — [Publications index](https://u.osu.edu/friedman.8/foundational-adventures/publications/) (Ohio State) — full list of Friedman's foundational mathematics papers
+
+### Videos
+
+8. Numberphile — [The Enormous TREE(3)](https://www.youtube.com/watch?v=3P6DWAwwViU) (Tony Padilla, 2017) — accessible introduction to TREE(3) and why it is so large
+9. Numberphile — [TREE vs Graham's Number](https://www.youtube.com/watch?v=0X9DYRLmTNY) — comparison of TREE(3) against other large numbers
+
+### Rust Libraries
+
+10. [clap](https://docs.rs/clap/latest/clap/) — CLI argument parsing (derive API)
+11. [serde](https://docs.rs/serde/latest/serde/) — serialization framework
+12. [serde_json](https://docs.rs/serde_json/latest/serde_json/) — JSON serialization for `sequence.json` export
+13. [rayon](https://docs.rs/rayon/latest/rayon/) — data-parallelism for candidate pool sweeps
 
 ---
 
