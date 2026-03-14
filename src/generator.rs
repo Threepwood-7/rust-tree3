@@ -444,3 +444,234 @@ where
 
     sequence
 }
+
+// ── Optimal exhaustive search ──────────────────────────────────────────────────
+
+/// Recursive DFS with refcount-based rejection and backtracking.
+///
+/// `rejected[i]` counts how many currently-accepted trees force candidate `i`
+/// to be unavailable. A candidate is usable iff `rejected[i] == 0`.
+///
+/// When candidate `chosen` is accepted:
+///   - `rejected[chosen] += 1`   (cannot reuse the same tree)
+///   - `rejected[j] += 1` for all j in `embeds_into[chosen]`  (no later tree may have
+///     an earlier tree embed into it)
+///
+/// Backtracking is the exact mirror (all decremented).
+fn dfs_optimal(
+    candidates: &[(String, Tree)],
+    fingerprints: &[TreeFingerprint],
+    embeds_into: &[Vec<usize>],
+    rejected: &mut Vec<u32>,
+    sequence: &mut Vec<usize>,
+    best: &mut Vec<usize>,
+    max_nodes: usize,
+    target: usize,
+    on_new_best: &mut dyn FnMut(&[usize]),
+) {
+    // Upper-bound pruning: even if every live candidate is usable, can we beat `best`?
+    let live: usize = rejected.iter().filter(|&&r| r == 0).count();
+    if sequence.len() + live <= best.len() {
+        return;
+    }
+
+    // Target reached — record if best and stop going deeper.
+    if target > 0 && sequence.len() >= target {
+        if sequence.len() > best.len() {
+            *best = sequence.clone();
+            on_new_best(best);
+        }
+        return;
+    }
+
+    let position = sequence.len() + 1; // 1-based position for the next tree
+    let allowed_size = position.min(max_nodes);
+    let mut extended = false;
+
+    for i in 0..candidates.len() {
+        if rejected[i] != 0 {
+            continue;
+        }
+        if candidates[i].1.size() > allowed_size {
+            continue; // too large for this position; may be valid later, not permanently rejected
+        }
+
+        // Tentatively accept candidate i.
+        rejected[i] += 1;
+        for &j in &embeds_into[i] {
+            rejected[j] += 1;
+        }
+        sequence.push(i);
+        extended = true;
+
+        dfs_optimal(
+            candidates,
+            fingerprints,
+            embeds_into,
+            rejected,
+            sequence,
+            best,
+            max_nodes,
+            target,
+            on_new_best,
+        );
+
+        // Undo.
+        sequence.pop();
+        rejected[i] -= 1;
+        for &j in &embeds_into[i] {
+            rejected[j] -= 1;
+        }
+    }
+
+    // Dead end: no valid extension exists from this node. Record if new best.
+    if !extended && sequence.len() > best.len() {
+        *best = sequence.clone();
+        on_new_best(best);
+    }
+}
+
+/// Exhaustive backtracking search for the LONGEST valid TREE(k) sequence.
+///
+/// Unlike the greedy strategies, this tries every valid candidate at each
+/// position and backtracks to explore all possibilities. This is exponential
+/// time — practical only for small `--max-nodes` (≤ 6 recommended for k=3).
+///
+/// Precomputes `embeds_into[i]` (all j where tree_i embeds into tree_j) in
+/// parallel before the DFS. This O(N²) upfront cost pays for itself because
+/// each DFS step sweeps in O(|embeds_into[i]|) instead of O(N).
+///
+/// `count` is the target sequence length (0 = search for absolute maximum).
+/// `on_new_best` is called with the full sequence each time a longer one is found.
+pub fn generate_sequence_optimal<F>(
+    count: usize,
+    max_nodes: usize,
+    k: u32,
+    mut on_new_best: F,
+) -> Vec<SequenceEntry>
+where
+    F: FnMut(&[SequenceEntry]),
+{
+    let mut cache: TreeCache = HashMap::new();
+
+    eprintln!(
+        "Pre-computing tree library (up to {} nodes, {} labels)...",
+        max_nodes, k
+    );
+    for sz in 1..=max_nodes {
+        let trees = all_trees_of_size_cached(sz, k, &mut cache);
+        eprintln!("  Size {:2}: {:8} trees", sz, trees.len());
+    }
+    eprintln!("Parallel workers: {}", rayon::current_num_threads());
+    eprintln!();
+
+    // Largest-first ordering: DFS finds strong solutions early → tighter pruning.
+    let all_candidates = all_trees_up_to_size_largest_first(max_nodes, k, &mut cache);
+    let n = all_candidates.len();
+    eprintln!("Candidate pool: {} trees.", n);
+
+    if n > 15_000 {
+        eprintln!(
+            "Warning: N={} is large. The O(N²) precomputation and exponential DFS",
+            n
+        );
+        eprintln!("may be impractical. Consider --max-nodes <= 6 for optimal strategy.");
+    }
+
+    // Fingerprints (parallel).
+    let fingerprints: Vec<TreeFingerprint> = all_candidates
+        .par_iter()
+        .map(|(_, t)| TreeFingerprint::compute(t))
+        .collect();
+
+    // embeds_into[i] = list of j (j≠i) where tree_i homeomorphically embeds into tree_j.
+    // If tree_i is placed in the sequence, every tree_j in this list is permanently
+    // forbidden from appearing later.
+    eprintln!("Precomputing embeds_into table (O(N²) with fingerprint gate)...");
+    let embeds_into: Vec<Vec<usize>> = (0..n)
+        .into_par_iter()
+        .map(|i| {
+            let (_, tree_i) = &all_candidates[i];
+            let fp_i = &fingerprints[i];
+            (0..n)
+                .filter(|&j| {
+                    j != i
+                        && TreeFingerprint::compatible(fp_i, &fingerprints[j])
+                        && embeds(tree_i, &all_candidates[j].1)
+                })
+                .collect()
+        })
+        .collect();
+
+    let total_edges: usize = embeds_into.iter().map(|v| v.len()).sum();
+    eprintln!("embeds_into ready: {} directed pairs.", total_edges);
+    eprintln!(
+        "Starting optimal DFS (target: {})...",
+        if count == 0 {
+            "maximum".to_string()
+        } else {
+            count.to_string()
+        }
+    );
+    eprintln!();
+
+    let mut rejected = vec![0u32; n];
+    let mut sequence_indices: Vec<usize> = Vec::new();
+    let mut best_indices: Vec<usize> = Vec::new();
+
+    {
+        // Both candidates_ref and fps_ref are shared borrows — Rust allows them to be
+        // captured by `wrapped` AND passed as parameters to `dfs_optimal` simultaneously.
+        let candidates_ref: &[(String, Tree)] = &all_candidates;
+        let fps_ref: &[TreeFingerprint] = &fingerprints;
+
+        let mut wrapped = |indices: &[usize]| {
+            eprintln!("  *** New best: {} trees ***", indices.len());
+            let entries: Vec<SequenceEntry> = indices
+                .iter()
+                .enumerate()
+                .map(|(pos, &idx)| {
+                    let (canon, tree) = &candidates_ref[idx];
+                    SequenceEntry {
+                        index: pos + 1,
+                        tree: tree.clone(),
+                        canonical: canon.clone(),
+                        fingerprint: fps_ref[idx],
+                    }
+                })
+                .collect();
+            on_new_best(&entries);
+        };
+
+        dfs_optimal(
+            candidates_ref,
+            fps_ref,
+            &embeds_into,
+            &mut rejected,
+            &mut sequence_indices,
+            &mut best_indices,
+            max_nodes,
+            count,
+            &mut wrapped,
+        );
+    }
+
+    eprintln!(
+        "Optimal search complete. Best sequence: {} trees.",
+        best_indices.len()
+    );
+
+    best_indices
+        .iter()
+        .enumerate()
+        .map(|(pos, &idx)| {
+            let (canon, tree) = &all_candidates[idx];
+            SequenceEntry {
+                index: pos + 1,
+                tree: tree.clone(),
+                canonical: canon.clone(),
+                fingerprint: fingerprints[idx],
+            }
+        })
+        .collect()
+}

@@ -25,6 +25,8 @@ pub enum StrategyArg {
     Largest,
     /// Pick a uniformly random valid tree at each position
     Random,
+    /// Exhaustive DFS backtracking — finds the LONGEST valid sequence (exponential time)
+    Optimal,
 }
 
 #[derive(clap::Args, Debug)]
@@ -49,7 +51,7 @@ pub struct GenerateArgs {
     #[arg(long)]
     pub export_json: bool,
 
-    /// Greedy selection strategy: smallest, largest, or random
+    /// Selection strategy: smallest, largest, random, or optimal (exhaustive)
     #[arg(long, default_value = "largest")]
     pub strategy: StrategyArg,
 
