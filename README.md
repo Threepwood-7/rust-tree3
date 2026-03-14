@@ -543,9 +543,16 @@ Pre-built `.cmd` scripts are in `./scripts/`:
 |--------|-------------|
 | `run_basic.cmd` | 10 trees, TREE(3), largest strategy |
 | `run_tree1.cmd` | TREE(1) — confirms sequence length 1 |
-| `run_tree2.cmd` | TREE(2) — confirms sequence length 3 |
+| `run_tree2.cmd` | TREE(2) — confirms sequence length 3 (greedy) |
 | `run_smallest_strategy.cmd` | 20 trees, smallest-first selection |
+| `run_random.cmd` | 20 trees, random strategy (fresh seed each run) |
+| `run_random_seed.cmd` | 20 trees, random strategy, fixed seed 42 (reproducible) |
+| `run_exhausted.cmd` | Run until pool exhausted (no `--count`), max-nodes 8 |
+| `run_medium.cmd` | Greedy until exhausted, max-nodes 9, release build |
 | `run_large.cmd` | 50 trees, max 10 nodes, release build |
+| `run_optimal_tree2.cmd` | Optimal exhaustive search for TREE(2) — confirms length 3 |
+| `run_optimal_small.cmd` | Optimal search, TREE(3), max-nodes 5 (fast) |
+| `run_optimal_medium.cmd` | Optimal search, TREE(3), max-nodes 6, release build (slow) |
 
 All scripts use `%~dp0..` so they work regardless of current working directory.
 
