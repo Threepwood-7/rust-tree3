@@ -232,12 +232,16 @@ mod canonical_tests {
 
 #[cfg(test)]
 mod generator_tests {
-    use crate::generator::{generate_sequence, SelectionStrategy};
+    use crate::generator::{generate_sequence, GenerateOpts, SelectionStrategy};
+
+    fn cpu_opts() -> GenerateOpts {
+        GenerateOpts { use_cuda: false, benchmark_sweep: false }
+    }
 
     /// TREE(1) = 1: only label 1, sequence must terminate after the first tree.
     #[test]
     fn tree1_length_is_1() {
-        let seq = generate_sequence(10, 10, 1, SelectionStrategy::LargestFirst, None, |_| {});
+        let seq = generate_sequence(10, 10, 1, SelectionStrategy::LargestFirst, None, &cpu_opts(), |_| {});
         assert_eq!(seq.len(), 1, "TREE(1) sequence must have exactly 1 tree");
         assert_eq!(seq[0].canonical, "1");
     }
@@ -245,14 +249,14 @@ mod generator_tests {
     /// TREE(2) = 3: labels {1,2}, known exact value.
     #[test]
     fn tree2_length_is_3() {
-        let seq = generate_sequence(10, 10, 2, SelectionStrategy::LargestFirst, None, |_| {});
+        let seq = generate_sequence(10, 10, 2, SelectionStrategy::LargestFirst, None, &cpu_opts(), |_| {});
         assert_eq!(seq.len(), 3, "TREE(2) sequence must have exactly 3 trees");
     }
 
     /// The i-th tree must have at most i nodes (enforced by the node budget rule).
     #[test]
     fn node_budget_respected() {
-        let seq = generate_sequence(7, 8, 3, SelectionStrategy::LargestFirst, None, |_| {});
+        let seq = generate_sequence(7, 8, 3, SelectionStrategy::LargestFirst, None, &cpu_opts(), |_| {});
         for entry in &seq {
             assert!(
                 entry.tree.size() <= entry.index,
@@ -265,7 +269,7 @@ mod generator_tests {
     /// First tree must always be a single-node tree (1 node at position 1).
     #[test]
     fn first_tree_is_single_node() {
-        let seq = generate_sequence(5, 8, 3, SelectionStrategy::LargestFirst, None, |_| {});
+        let seq = generate_sequence(5, 8, 3, SelectionStrategy::LargestFirst, None, &cpu_opts(), |_| {});
         assert!(!seq.is_empty());
         assert_eq!(seq[0].tree.size(), 1);
     }
@@ -274,7 +278,7 @@ mod generator_tests {
     #[test]
     fn sequence_invariant_largest_strategy() {
         use crate::embedding::embeds;
-        let seq = generate_sequence(10, 8, 3, SelectionStrategy::LargestFirst, None, |_| {});
+        let seq = generate_sequence(10, 8, 3, SelectionStrategy::LargestFirst, None, &cpu_opts(), |_| {});
         for i in 0..seq.len() {
             for j in (i + 1)..seq.len() {
                 assert!(
@@ -289,7 +293,7 @@ mod generator_tests {
     #[test]
     fn sequence_invariant_smallest_strategy() {
         use crate::embedding::embeds;
-        let seq = generate_sequence(10, 8, 3, SelectionStrategy::SmallestFirst, None, |_| {});
+        let seq = generate_sequence(10, 8, 3, SelectionStrategy::SmallestFirst, None, &cpu_opts(), |_| {});
         for i in 0..seq.len() {
             for j in (i + 1)..seq.len() {
                 assert!(
@@ -315,7 +319,7 @@ mod generator_tests {
             "3(2(3),3(2,2))",
             "3(2(3),3(2),3(2))",
         ];
-        let seq = generate_sequence(7, 8, 3, SelectionStrategy::LargestFirst, None, |_| {});
+        let seq = generate_sequence(7, 8, 3, SelectionStrategy::LargestFirst, None, &cpu_opts(), |_| {});
         assert_eq!(seq.len(), expected.len());
         for (i, (entry, exp)) in seq.iter().zip(expected.iter()).enumerate() {
             assert_eq!(

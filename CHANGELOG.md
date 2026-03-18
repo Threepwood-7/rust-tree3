@@ -4,6 +4,73 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [Unreleased] — 2026-03-18 (GPU / cudarc)
+
+### Added
+
+**GPU-accelerated post-acceptance sweep** (`--cuda` flag, `--benchmark-sweep` flag)
+
+Full GPU integration via `cudarc` 0.19.3 with two runtime modes:
+
+- **Full-embed mode** (requires nvcc + matching GPU driver): the CUDA kernel in
+  `kernels/sweep.cu` performs the complete homeomorphic embedding check on-device.
+  Enabled automatically when nvcc is found at build time and the installed GPU
+  driver supports the toolkit version.
+- **Fp-filter mode** (fallback, always available): the hand-written PTX kernel
+  (`kernels/sweep_fp.ptx`, sm_75 / PTX 6.5) performs the fingerprint gate on GPU;
+  survivors are checked by CPU rayon.  Works with any CUDA 12.6+ driver.
+
+**`src/gpu_sweep.rs`** (new)
+- `GpuFlatTree` (112 bytes, `#[repr(C)]`) and `GpuFlatFP` (20 bytes) — fixed-size
+  flat encodings transferred over PCIe; must stay in sync with `kernels/sweep.cu`.
+- `GpuSweeper::try_new()`: initialises device memory, tries full-embed PTX, falls
+  back to fp-filter PTX.  Stub impl compiled when `cuda` feature is off.
+- `GpuSweeper::sweep()`: dispatches fingerprint gate to GPU, runs embedding on CPU
+  survivors (fp-filter mode), or runs entire check on device (full-embed mode).
+- `GpuSweeper::sync_rejected()`: syncs CPU `AtomicBool` rejection bitset to device.
+
+**`kernels/sweep.cu`** (new)
+- Full CUDA C implementation: `fp_compat`, `do_embed`, `can_embed_sub`, `match_ch`.
+  Mutual recursion depth ≤ 9; per-thread stack ≤ ~300 bytes (within CUDA default).
+
+**`kernels/sweep_fp.ptx`** (new)
+- Hand-written PTX 6.5 (sm_75) for the fingerprint-only kernel.  Embedded directly
+  in the binary via `include_str!` — no nvcc required at runtime.
+
+**`build.rs`** (new)
+- Auto-detects nvcc in common install paths (Windows + Linux).
+- On Windows, finds the newest MSVC `cl.exe` and passes `-ccbin` to nvcc.
+- Compiles `sweep.cu` to PTX; patches `.version` header to `8.6` for CUDA 12.6
+  driver compatibility.  Non-fatal: falls back to fp-filter mode if nvcc is absent
+  or if the driver cannot load the compiled kernel.
+
+**`src/cli.rs`** — added `--cuda` and `--benchmark-sweep` flags to `generate`.
+
+**`src/generator.rs`** — `GenerateOpts`, `SweepTiming`; `run_sweep()` dispatches to
+GPU or CPU; `print_benchmark_summary()` reports per-position and totals.
+
+**`DISTRIB.md`** (new) — architecture document covering GPU flat encoding design,
+kernel structure, fp-filter vs full-embed analysis, four multi-host distribution
+strategies, actual benchmark results, and driver compatibility requirements.
+
+### Changed
+
+- `Cargo.toml`: upgraded `cudarc` to 0.19.3 (`cuda-12060` + `nvrtc` features).
+- `src/tests.rs`: all `generate_sequence` call sites updated with `GenerateOpts`.
+
+### Performance (benchmark, GTX 1660, driver 560.94 / CUDA 12.6)
+
+| Mode | CPU rayon | GPU fp-filter | Ratio |
+|------|-----------|--------------|-------|
+| Per-step sweep (N_active ≈ 2k, N_pool = 502k) | 0.3–0.5 ms | 0.7–1.0 ms | GPU ~3× slower |
+
+GPU fp-filter is slower here because PCIe transfer overhead (502 KB H2D + 502 KB D2H
+per step) dominates when the active candidate count is small.  Full-embed mode is
+expected to give ~15× speedup on pool-rebuild replay (N=502k), but requires a GPU
+driver ≥570.x to load the CUDA 13.2-compiled kernel (current driver: 560.94).
+
+---
+
 ## [Unreleased] — 2026-03-13 (pass 4)
 
 ### Performance

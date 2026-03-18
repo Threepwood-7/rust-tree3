@@ -1,0 +1,93 @@
+// sweep_fp_kernel — fingerprint pre-filter only (no full embedding on GPU).
+//
+// For each candidate B[i], check TreeFingerprint::compatible(a_fp, b_fps[i]).
+// Output out[i] = 1 if compatible (candidate must then be checked on CPU),
+//         out[i] = 0 if definitively rejected (or already rejected).
+//
+// FlatFP layout (20 bytes):
+//   byte 0      : size
+//   bytes 1..8  : label_counts[0..7]   (we check indices 1..7 → bytes 2..8)
+//   bytes 9..16 : max_deg[0..7]         (we check indices 1..7 → bytes 10..16)
+//   bytes 17..19: padding
+//
+// Args: a_fp (u64), b_fps (u64), rejected (u64), out (u64), n (u32)
+
+.version 7.5
+.target sm_75
+.address_size 64
+
+.visible .entry sweep_fp_kernel(
+    .param .u64 param_a_fp,
+    .param .u64 param_b_fps,
+    .param .u64 param_rejected,
+    .param .u64 param_out,
+    .param .u32 param_n
+){
+    .reg .u64 %rd<8>;
+    .reg .u32 %r<8>;
+    .reg .pred %p;
+
+    ld.param.u64 %rd0, [param_a_fp];
+    ld.param.u64 %rd1, [param_b_fps];
+    ld.param.u64 %rd2, [param_rejected];
+    ld.param.u64 %rd3, [param_out];
+    ld.param.u32 %r0,  [param_n];
+
+    // i = blockIdx.x * blockDim.x + threadIdx.x
+    mov.u32 %r1, %tid.x;
+    mov.u32 %r2, %ctaid.x;
+    mov.u32 %r3, %ntid.x;
+    mad.lo.u32 %r4, %r2, %r3, %r1;
+
+    // if (i >= n) return
+    setp.ge.u32 %p, %r4, %r0;
+    @%p bra done;
+
+    cvt.u64.u32 %rd4, %r4;
+
+    // if (rejected[i]) → out[i] = 0, return
+    add.u64 %rd5, %rd2, %rd4;
+    ld.global.u8 %r5, [%rd5];
+    setp.ne.u32 %p, %r5, 0;
+    @%p bra set_zero;
+
+    // b_fp_ptr = b_fps + i * 20
+    mul.lo.u64 %rd5, %rd4, 20;
+    add.u64 %rd6, %rd1, %rd5;
+
+    // size check: a.size > b.size ?
+    ld.global.u8 %r5, [%rd0+0];
+    ld.global.u8 %r6, [%rd6+0];
+    setp.gt.u32 %p, %r5, %r6;
+    @%p bra set_zero;
+
+    // label_counts[1..7]: offsets 2..8
+    ld.global.u8 %r5, [%rd0+2];  ld.global.u8 %r6, [%rd6+2];  setp.gt.u32 %p, %r5, %r6;  @%p bra set_zero;
+    ld.global.u8 %r5, [%rd0+3];  ld.global.u8 %r6, [%rd6+3];  setp.gt.u32 %p, %r5, %r6;  @%p bra set_zero;
+    ld.global.u8 %r5, [%rd0+4];  ld.global.u8 %r6, [%rd6+4];  setp.gt.u32 %p, %r5, %r6;  @%p bra set_zero;
+    ld.global.u8 %r5, [%rd0+5];  ld.global.u8 %r6, [%rd6+5];  setp.gt.u32 %p, %r5, %r6;  @%p bra set_zero;
+    ld.global.u8 %r5, [%rd0+6];  ld.global.u8 %r6, [%rd6+6];  setp.gt.u32 %p, %r5, %r6;  @%p bra set_zero;
+    ld.global.u8 %r5, [%rd0+7];  ld.global.u8 %r6, [%rd6+7];  setp.gt.u32 %p, %r5, %r6;  @%p bra set_zero;
+    ld.global.u8 %r5, [%rd0+8];  ld.global.u8 %r6, [%rd6+8];  setp.gt.u32 %p, %r5, %r6;  @%p bra set_zero;
+
+    // max_deg[1..7]: offsets 10..16
+    ld.global.u8 %r5, [%rd0+10]; ld.global.u8 %r6, [%rd6+10]; setp.gt.u32 %p, %r5, %r6;  @%p bra set_zero;
+    ld.global.u8 %r5, [%rd0+11]; ld.global.u8 %r6, [%rd6+11]; setp.gt.u32 %p, %r5, %r6;  @%p bra set_zero;
+    ld.global.u8 %r5, [%rd0+12]; ld.global.u8 %r6, [%rd6+12]; setp.gt.u32 %p, %r5, %r6;  @%p bra set_zero;
+    ld.global.u8 %r5, [%rd0+13]; ld.global.u8 %r6, [%rd6+13]; setp.gt.u32 %p, %r5, %r6;  @%p bra set_zero;
+    ld.global.u8 %r5, [%rd0+14]; ld.global.u8 %r6, [%rd6+14]; setp.gt.u32 %p, %r5, %r6;  @%p bra set_zero;
+    ld.global.u8 %r5, [%rd0+15]; ld.global.u8 %r6, [%rd6+15]; setp.gt.u32 %p, %r5, %r6;  @%p bra set_zero;
+    ld.global.u8 %r5, [%rd0+16]; ld.global.u8 %r6, [%rd6+16]; setp.gt.u32 %p, %r5, %r6;  @%p bra set_zero;
+
+    // Passed all checks: out[i] = 1
+    add.u64 %rd7, %rd3, %rd4;
+    st.global.u8 [%rd7], 1;
+    bra done;
+
+set_zero:
+    add.u64 %rd7, %rd3, %rd4;
+    st.global.u8 [%rd7], 0;
+
+done:
+    ret;
+}

@@ -58,4 +58,14 @@ pub struct GenerateArgs {
     /// RNG seed for the random strategy (omit for a time-based seed)
     #[arg(long)]
     pub seed: Option<u64>,
+
+    /// Use GPU (CUDA) for the post-acceptance sweep instead of CPU rayon.
+    /// Requires the binary compiled with: cargo build --features cuda
+    #[arg(long)]
+    pub cuda: bool,
+
+    /// Run both CPU and GPU sweeps at every step and print a timing comparison.
+    /// Implies --cuda.
+    #[arg(long)]
+    pub benchmark_sweep: bool,
 }

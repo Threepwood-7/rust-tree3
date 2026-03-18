@@ -3,6 +3,7 @@ mod cli;
 mod embedding;
 mod fingerprint;
 mod generator;
+mod gpu_sweep;
 mod memlock;
 mod svg_render;
 mod tests;
@@ -10,7 +11,7 @@ mod tree;
 
 use clap::Parser;
 use cli::{Cli, Commands, StrategyArg};
-use generator::{generate_sequence, generate_sequence_optimal, SelectionStrategy};
+use generator::{generate_sequence, generate_sequence_optimal, GenerateOpts, SelectionStrategy};
 use serde_json;
 use std::fs;
 use std::path::Path;
@@ -175,13 +176,19 @@ fn run_generate(args: cli::GenerateArgs) {
     let mut overview: Vec<(crate::tree::Tree, usize, String)> = Vec::new();
     let overview_path = out_dir.join("overview.svg");
 
+    let opts = GenerateOpts {
+        use_cuda: args.cuda,
+        benchmark_sweep: args.benchmark_sweep,
+    };
+
     let sequence = generate_sequence(
         count,
         args.max_nodes,
         args.labels,
         strategy,
         args.seed,
-        |entry| {
+        &opts,
+        |entry: &generator::SequenceEntry| -> () {
             println!(
                 "[{:03}] Found tree ({} nodes): {}",
                 entry.index,
